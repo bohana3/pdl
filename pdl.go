@@ -7,18 +7,19 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"sync"
-
 	"strings"
+	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/bohana3/pdl/chunker"
 )
 
-//main function that downloads file from URL
-func Download(url, fileName string, maxGoroutines *int, chunkSize *int64) error {
-	log.Printf("Download starts: url=%s, fileName=%s, maxGoroutines=%d, chunkSize=%d", url, fileName, maxGoroutines, chunkSize)
+// Download that downloads a file from a URL using chunks
+func Download(url, fileName string, maxGoroutines *int, chunkSize *int64, retries *int, timeout int) error {
+	log.Printf("Download starts: url=%s, fileName=%s, maxGoroutines=%d, chunkSize=%d, retries=%d, timeout=%d",
+		url, fileName, *maxGoroutines, *chunkSize, *retries, timeout)
 
-	//var wg sync.WaitGroup
 	urlInfo, err := getUrlInfo(url)
 	if err != nil {
 		return err
@@ -33,12 +34,12 @@ func Download(url, fileName string, maxGoroutines *int, chunkSize *int64) error 
 		return err
 	}
 
+	errGp := new(errgroup.Group)
 	chunkCh := make(chan chunker.Chunk)
-	wg := new(sync.WaitGroup)
-	// Adding routines and run then
-	for iroutine := 0; iroutine < *maxGoroutines; iroutine++ {
-		wg.Add(1)
-		go worker(chunkCh, iroutine, url, fileName, wg)
+
+	// Adding routines and run them
+	for i := 0; i < *maxGoroutines; i++ {
+		errGp.Go(func() error { return downloadAll(chunkCh, url, *retries, timeout, fileName) })
 	}
 
 	// Spreading chunks to free goroutines
@@ -48,9 +49,16 @@ func Download(url, fileName string, maxGoroutines *int, chunkSize *int64) error 
 
 	// Wait for all goroutines to finish
 	close(chunkCh)
-	wg.Wait()
 
-	//checksum
+	if err := errGp.Wait(); err != nil {
+		log.Printf("one of the goroutines failed: %s", err.Error())
+		err := os.Remove(fileName)
+		if err != nil {
+			log.Printf("unable to delete file '%s': %s", fileName, err.Error())
+		}
+	}
+
+	// Checksum
 	md5, err := getMd5(fileName)
 	if err != nil {
 		log.Printf("getMd5 failed: path=%s", fileName)
@@ -59,21 +67,25 @@ func Download(url, fileName string, maxGoroutines *int, chunkSize *int64) error 
 		log.Printf("checksum failed: etag=%s, md5=%s", urlInfo.ETag, md5)
 	}
 
+	log.Printf("Download url '%s' succeeded to file '%s'", url, fileName)
 	return nil
 }
 
-func worker(chunksChan chan chunker.Chunk, iroutine int, url string, fileName string, wg *sync.WaitGroup) {
-	// Decrease counter of wait-group when goroutine finishes
-	defer wg.Done()
-
+// downloadAll that downloads all files chunks and writes them into file
+func downloadAll(chunksChan chan chunker.Chunk, url string, retries int, timeout int, fileName string) error {
+	var err error
 	for chunk := range chunksChan {
-		//log.Printf("downloadPart started with goroutine %d and chunk #%v\n", iroutine, chunk)
-		err := downloadPart(url, chunk.Start, chunk.End, fileName)
-		if err != nil {
-			log.Fatalf("downloadPart failed: %s", err.Error())
+		for retries > 0 {
+			err = downloadPart(url, retries, chunk.Start, chunk.End, fileName, timeout)
+			if err != nil {
+				log.Printf("downloadPart failed: %s", err.Error())
+				retries -= 1
+			} else {
+				break
+			}
 		}
-		//log.Printf("downloadPart done with goroutine %d and chunk #%v\n", iroutine, chunk)
 	}
+	return err
 }
 
 type UrlInfo struct {
@@ -81,6 +93,7 @@ type UrlInfo struct {
 	ETag          string
 }
 
+// getUrlInfo retrieves the file length and hash
 func getUrlInfo(url string) (*UrlInfo, error) {
 	resp, err := http.Head(url)
 	if err != nil {
@@ -98,7 +111,8 @@ func getUrlInfo(url string) (*UrlInfo, error) {
 	return urlInfo, nil
 }
 
-func downloadPart(url string, start, end int64, path string) error {
+// downloadPart downloads a file chunk and writes it into file
+func downloadPart(url string, retries int, start, end int64, path string, timeout int) error {
 
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
@@ -106,7 +120,12 @@ func downloadPart(url string, start, end int64, path string) error {
 	}
 
 	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end))
-	resp, err := http.DefaultClient.Do(req)
+
+	var httpClient = &http.Client{
+		Timeout: time.Duration(timeout) * time.Second,
+	}
+
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -149,7 +168,7 @@ func createEmptyFile(path string, size int64) error {
 	return nil
 }
 
-// compute file downloaded hash
+// getMd5 computes file hash
 func getMd5(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {

@@ -38,7 +38,7 @@ func TestDownloadPart(t *testing.T) {
 	err := createEmptyFile(testFile, 50)
 	require.NoError(t, err)
 
-	err = downloadPart(testURL, 0, 50, testFile)
+	err = downloadPart(testURL, 3, 0, 50, testFile, 30)
 	require.NoError(t, err)
 
 	//cleanup

@@ -8,3 +8,6 @@ github.com/pmezard/go-difflib/difflib
 ## explicit
 github.com/stretchr/testify/assert
 github.com/stretchr/testify/require
+# golang.org/x/sync v0.0.0-20220601150217-0de741cfad7f
+## explicit
+golang.org/x/sync/errgroup

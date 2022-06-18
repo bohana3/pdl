@@ -10,7 +10,7 @@
             "request": "launch",
             "mode": "auto",
             "program": "${workspaceRoot}/cmd/pdl",
-            "args":["-maxgoroutines=50", "-chunksize=50000"]
+            "args":["-maxgoroutines=50", "-chunksize=50000", "-retries=3"]
         }
     ]
 }
