@@ -34,7 +34,7 @@ func TestGetMd5(t *testing.T) {
 
 func TestDownloadPart(t *testing.T) {
 	const testURL = "https://s3.amazonaws.com/nyc-tlc/trip+data/green_tripdata_2018-03.parquet"
-	const testFile = "tests/part"
+	const testFile = "tests_resources/part"
 	err := createEmptyFile(testFile, 50)
 	require.NoError(t, err)
 
@@ -46,7 +46,7 @@ func TestDownloadPart(t *testing.T) {
 }
 
 func TestCreateEmptyFile(t *testing.T) {
-	const testFile = "tests/empty"
+	const testFile = "tests_resources/empty"
 	testFileSize := int64(50)
 	err := createEmptyFile(testFile, testFileSize)
 	require.NoError(t, err)

@@ -14,11 +14,11 @@ import (
 	"github.com/bohana3/pdl/chunker"
 )
 
-const chunkSize = 32768 //32KB
+//main function that downloads file from URL
+func Download(url, fileName string, maxGoroutines *int, chunkSize *int64) error {
+	log.Printf("Download starts: url=%s, fileName=%s, maxGoroutines=%d, chunkSize=%d", url, fileName, maxGoroutines, chunkSize)
 
-//main function that download file from URL
-func Download(url, fileName string) error {
-	var wg sync.WaitGroup
+	//var wg sync.WaitGroup
 	urlInfo, err := getUrlInfo(url)
 	if err != nil {
 		return err
@@ -28,22 +28,26 @@ func Download(url, fileName string) error {
 	if err != nil {
 		return err
 	}
-	chunks, err := chunker.Split(urlInfo.ContentLength, chunkSize)
+	chunks, err := chunker.Split(urlInfo.ContentLength, *chunkSize)
 	if err != nil {
 		return err
 	}
-	wg.Add(len(chunks))
 
-	for _, chunk := range chunks {
-		go func(chunk chunker.Chunk) {
-			err := downloadPart(url, chunk.Start, chunk.End, fileName)
-			if err != nil {
-				log.Fatalf("downloadPart failed: %s", err.Error())
-			}
-			wg.Done()
-		}(chunk)
+	chunkCh := make(chan chunker.Chunk)
+	wg := new(sync.WaitGroup)
+	// Adding routines and run then
+	for iroutine := 0; iroutine < *maxGoroutines; iroutine++ {
+		wg.Add(1)
+		go worker(chunkCh, iroutine, url, fileName, wg)
 	}
 
+	// Spreading chunks to free goroutines
+	for _, chunk := range chunks {
+		chunkCh <- chunk
+	}
+
+	// Wait for all goroutines to finish
+	close(chunkCh)
 	wg.Wait()
 
 	//checksum
@@ -56,6 +60,20 @@ func Download(url, fileName string) error {
 	}
 
 	return nil
+}
+
+func worker(chunksChan chan chunker.Chunk, iroutine int, url string, fileName string, wg *sync.WaitGroup) {
+	// Decrease counter of wait-group when goroutine finishes
+	defer wg.Done()
+
+	for chunk := range chunksChan {
+		//log.Printf("downloadPart started with goroutine %d and chunk #%v\n", iroutine, chunk)
+		err := downloadPart(url, chunk.Start, chunk.End, fileName)
+		if err != nil {
+			log.Fatalf("downloadPart failed: %s", err.Error())
+		}
+		//log.Printf("downloadPart done with goroutine %d and chunk #%v\n", iroutine, chunk)
+	}
 }
 
 type UrlInfo struct {
@@ -81,6 +99,7 @@ func getUrlInfo(url string) (*UrlInfo, error) {
 }
 
 func downloadPart(url string, start, end int64, path string) error {
+
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return err
