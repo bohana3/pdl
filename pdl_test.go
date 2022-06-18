@@ -1,6 +1,7 @@
 package pdl
 
 import (
+	"os"
 	"runtime"
 	"testing"
 
@@ -39,4 +40,21 @@ func TestDownloadPart(t *testing.T) {
 
 	err = downloadPart(testURL, 0, 50, testFile)
 	require.NoError(t, err)
+
+	//cleanup
+	os.Remove(testFile)
+}
+
+func TestCreateEmptyFile(t *testing.T) {
+	const testFile = "tests/empty"
+	testFileSize := int64(50)
+	err := createEmptyFile(testFile, testFileSize)
+	require.NoError(t, err)
+	f, err := os.Stat(testFile)
+	require.NoError(t, err)
+
+	require.Equal(t, testFileSize, f.Size())
+
+	//cleanup
+	os.Remove(testFile)
 }

@@ -1,6 +1,7 @@
 package pdl
 
 import (
+	"crypto/md5"
 	"fmt"
 	"io"
 	"log"
@@ -8,33 +9,26 @@ import (
 	"os"
 	"sync"
 
+	"strings"
+
 	"github.com/bohana3/pdl/chunker"
 )
 
-func downloadSize(url string) (int64, error) {
-	resp, err := http.Head(url)
-	if err != nil {
-		return 0, err
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("%s: bad status - %s", url, resp.Status)
-	}
-
-	return resp.ContentLength, nil
-}
-
 const chunkSize = 32768 //32KB
 
+//main function that download file from URL
 func Download(url, fileName string) error {
 	var wg sync.WaitGroup
-	size, err := downloadSize(url)
-	log.Printf("%s: size=%d", url, size)
-	err = createEmptyFile(fileName, size)
+	urlInfo, err := getUrlInfo(url)
 	if err != nil {
 		return err
 	}
-	chunks, err := chunker.Split(size, chunkSize)
+	log.Printf("%s: size=%d, etag=%s", url, urlInfo.ContentLength, urlInfo.ETag)
+	err = createEmptyFile(fileName, urlInfo.ContentLength)
+	if err != nil {
+		return err
+	}
+	chunks, err := chunker.Split(urlInfo.ContentLength, chunkSize)
 	if err != nil {
 		return err
 	}
@@ -42,12 +36,48 @@ func Download(url, fileName string) error {
 
 	for _, chunk := range chunks {
 		go func(chunk chunker.Chunk) {
-			downloadPart(url, chunk.Start, chunk.End, fileName)
+			err := downloadPart(url, chunk.Start, chunk.End, fileName)
+			if err != nil {
+				log.Fatalf("downloadPart failed: %s", err.Error())
+			}
 			wg.Done()
 		}(chunk)
 	}
 
+	wg.Wait()
+
+	//checksum
+	md5, err := getMd5(fileName)
+	if err != nil {
+		log.Printf("getMd5 failed: path=%s", fileName)
+	}
+	if urlInfo.ETag != md5 {
+		log.Printf("checksum failed: etag=%s, md5=%s", urlInfo.ETag, md5)
+	}
+
 	return nil
+}
+
+type UrlInfo struct {
+	ContentLength int64
+	ETag          string
+}
+
+func getUrlInfo(url string) (*UrlInfo, error) {
+	resp, err := http.Head(url)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%s: bad status - %s", url, resp.Status)
+	}
+
+	urlInfo := &UrlInfo{
+		ContentLength: resp.ContentLength,
+		ETag:          strings.Replace(resp.Header["Etag"][0], "\"", "", -1),
+	}
+	return urlInfo, nil
 }
 
 func downloadPart(url string, start, end int64, path string) error {
@@ -62,7 +92,7 @@ func downloadPart(url string, start, end int64, path string) error {
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != (http.StatusOK | http.StatusPartialContent) {
 		return fmt.Errorf("%s: %s", url, resp.Status)
 	}
 	// TODO: Check that content-length is end-start?
@@ -98,4 +128,20 @@ func createEmptyFile(path string, size int64) error {
 	file.Write([]byte{0})
 
 	return nil
+}
+
+// compute file downloaded hash
+func getMd5(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	h := md5.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
 }
